@@ -2,6 +2,7 @@
 import pandas as pd
 import os
 from torch.utils.data import Dataset
+from Separator import Separator
 
 
 class SIMSData(Dataset):
@@ -9,6 +10,7 @@ class SIMSData(Dataset):
         super().__init__()
         self.root = kwargs["root"]
         self.mode = kwargs["mode"]
+        self.separator = Separator(self, **kwargs)
         self._raw_meta = None
 
     @property
