@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
-from transformers import WavLMModel, WavLMConfig
-
+import numpy as np
+from transformers import WavLMModel, WavLMConfig, get_linear_schedule_with_warmup
 
 class AttentivePooling(nn.Module):
     def __init__(self, input_dim):
@@ -53,12 +53,11 @@ class WavLMSentimentRegressor(nn.Module):
 
 class AudioExtractor:
     def __init__(
-        self, type="train", details=True, train_loader=None, val_loader=None, **kwargs
+        self, type="train", details=True, dataloader=None, **kwargs
     ):
         self.type = type
         self.details = details
-        self.train_loader = train_loader
-        self.val_loader = val_loader
+        self.dataloader = dataloader
         self.DEVICE = kwargs.get(
             "device", "cuda" if torch.cuda.is_available() else "cpu"
         )
@@ -93,11 +92,28 @@ class AudioExtractor:
             1.0,
         ]
 
-        if details:
-            print("loading datasets...")
-            print(f"loading model {self.MODEL_NAME}...")
         self.model = WavLMSentimentRegressor(pretrained_model=self.MODEL_NAME).to(
             self.DEVICE
         )
-        if details:
-            print("model loaded successfully.")
+        
+        if self.type == "train":
+            self.optimizer = torch.optim.Adam(
+                self.model.parameters(), lr=self.LR
+            )
+            self.criterion = nn.MSELoss()
+            self.total_steps = len(self.dataloader) * self.EPOCHS
+            self.scheduler = get_linear_schedule_with_warmup(
+                self.optimizer,
+                num_warmup_steps=int(0.1 * self.total_steps),
+                num_training_steps=self.total_steps,
+            )
+        
+    def discretize(self, value):
+        values = np.array(self.DISCRETE_VALUES)
+        return values[np.argmin(np.abs(values - value))]
+    
+    def predict(self, audio):
+        ...
+        
+    def train(self):
+        ...
