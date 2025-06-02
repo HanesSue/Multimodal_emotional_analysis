@@ -16,8 +16,8 @@ from config import (
 )
 
 from dataset import MultimodalEmotionDataset, multimodal_collate_fn
-from models import PretrainedEncoderWrapper, FusionMLP
-
+from models.models import VideoExtractor, TextExtractor, AudioExtractor, FusionMLP
+import config
 # 如果使用 Whisper tokenizer，需要在 data_processing 中已经准备好文本字符串
 # 这里假设你有一个简单的文本 encoder（如 BERT / RoBERTa / LSTM 等），可以自行替换
 # 本示例暂不包含具体 Tokenizer 代码，只给出示意
@@ -25,11 +25,29 @@ from models import PretrainedEncoderWrapper, FusionMLP
 # ---------------------------------------------------
 # 1. 初始化 Dataset & DataLoader
 # ---------------------------------------------------
-dataset = MultimodalEmotionDataset()
-dataloader = DataLoader(
-    dataset,
+train_dataset = MultimodalEmotionDataset(mode="train") 
+train_dataloader = DataLoader(
+    train_dataset,
     batch_size=BATCH_SIZE,
     shuffle=True,
+    num_workers=4,
+    collate_fn=multimodal_collate_fn,
+    pin_memory=True,
+)
+test_dataset = MultimodalEmotionDataset(mode="test")  # 如果有测试集，可以类似初始化
+test_dataloader = DataLoader(
+    test_dataset,
+    batch_size=BATCH_SIZE,
+    shuffle=False,
+    num_workers=4,
+    collate_fn=multimodal_collate_fn,
+    pin_memory=True,
+)
+val_dataset = MultimodalEmotionDataset(mode="valid")  # 验证集
+val_dataloader = DataLoader(
+    val_dataset,
+    batch_size=BATCH_SIZE,
+    shuffle=False,
     num_workers=4,
     collate_fn=multimodal_collate_fn,
     pin_memory=True,
@@ -39,11 +57,11 @@ dataloader = DataLoader(
 # 2. 加载预训练编码器 & 融合 MLP
 # ---------------------------------------------------
 # 视觉编码器
-visual_encoder = PretrainedEncoderWrapper(model_path=VISUAL_ENCODER_PATH).to(DEVICE)
+visual_encoder = PretrainedEncoderWrapper(model_path=config.VISUAL_ENCODER_PATH).to(DEVICE)
 # 音频编码器
-audio_encoder = PretrainedEncoderWrapper(model_path=AUDIO_ENCODER_PATH).to(DEVICE)
+audio_encoder = PretrainedEncoderWrapper(model_path=config.AUDIO_ENCODER_PATH).to(DEVICE)
 # 文本编码器
-text_encoder = PretrainedEncoderWrapper(model_path=TEXT_ENCODER_PATH).to(DEVICE)
+text_encoder = PretrainedEncoderWrapper(model_path=config.TEXT_ENCODER_PATH).to(DEVICE)
 
 # 融合 MLP
 fusion_mlp = FusionMLP().to(DEVICE)
@@ -60,7 +78,9 @@ if FINETUNE_ENCODERS:
 
 optimizer = torch.optim.Adam(params, lr=LR)
 criterion = nn.MSELoss()  # 假设标签是连续值回归；如果分类，可换成 CrossEntropyLoss
-
+best_val_loss = float("inf")  # 用于保存最优模型
+# 确保检查点目录存在
+os.makedirs(CHECKPOINT_DIR, exist_ok=True)
 # ---------------------------------------------------
 # 4. 训练循环
 # ---------------------------------------------------
@@ -71,9 +91,9 @@ for epoch in range(NUM_EPOCHS):
     fusion_mlp.train()
 
     epoch_loss = 0.0
-    pbar = tqdm(dataloader, desc=f"Epoch {epoch+1}/{NUM_EPOCHS}")
+    train_pbar = tqdm(train_dataloader, desc=f"Epoch {epoch+1}/{NUM_EPOCHS}")
 
-    for batch in pbar:
+    for batch in train_pbar:
         # ---------------------------
         # 4.1 读取数据
         # ---------------------------
@@ -153,26 +173,95 @@ for epoch in range(NUM_EPOCHS):
         optimizer.step()
 
         epoch_loss += loss.item() * labels.size(0)
-        pbar.set_postfix({"loss": f"{loss.item():.4f}"})
-
-    avg_loss = epoch_loss / len(dataset)
+        train_pbar.set_postfix({"loss": f"{loss.item():.4f}"})
+        
+    avg_loss = epoch_loss / len(train_dataset)
     print(f"Epoch {epoch+1} 完成，平均 Loss: {avg_loss:.4f}")
 
+    visual_encoder.eval()
+    audio_encoder.eval()
+    text_encoder.eval()
+    fusion_mlp.eval()
+    
+    val_epoch_loss = 0.0
+    with torch.no_grad():
+        for batch in val_dataloader:
+            video_paths = batch["video_paths"]
+            audio_paths = batch["audio_paths"]
+            texts = batch["texts"]
+            labels = batch["labels"].to(DEVICE)
+
+            # 视觉特征
+            v_feats = torch.randn(len(video_paths), 512).to(DEVICE)
+            v_feats = visual_encoder(v_feats)
+
+            # 音频特征
+            a_feats = torch.randn(len(audio_paths), 512).to(DEVICE)
+            a_feats = audio_encoder(a_feats)
+
+            # 文本特征
+            t_feats = torch.randn(len(texts), 512).to(DEVICE)
+            t_feats = text_encoder(t_feats)
+
+            # 融合预测
+            preds = fusion_mlp(v_feats, a_feats, t_feats)
+
+            loss = criterion(preds, labels)
+            val_epoch_loss += loss.item() * labels.size(0)
+    
+    val_avg_loss = val_epoch_loss / len(val_dataset)
     # ---------------------------
     # 4.6 保存 Checkpoint
     # ---------------------------
-    ckpt = {
-        "fusion_mlp_state_dict": fusion_mlp.state_dict(),
-        "optimizer_state_dict": optimizer.state_dict(),
-        "epoch": epoch + 1,
-    }
-    if FINETUNE_ENCODERS:
-        ckpt["visual_encoder_state_dict"] = visual_encoder.state_dict()
-        ckpt["audio_encoder_state_dict"] = audio_encoder.state_dict()
-        ckpt["text_encoder_state_dict"] = text_encoder.state_dict()
+    if val_avg_loss < best_val_loss:
+        best_val_loss = val_avg_loss
+        print(f"验证集损失降低到 {val_avg_loss:.4f}，保存模型...")
+        ckpt = {
+            "fusion_mlp_state_dict": fusion_mlp.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+            "epoch": epoch + 1,
+        }
+        if FINETUNE_ENCODERS:
+            ckpt["visual_encoder_state_dict"] = visual_encoder.state_dict()
+            ckpt["audio_encoder_state_dict"] = audio_encoder.state_dict()
+            ckpt["text_encoder_state_dict"] = text_encoder.state_dict()
 
-    save_path = os.path.join(CHECKPOINT_DIR, f"multimodal_epoch{epoch+1}.pth")
-    torch.save(ckpt, save_path)
-    print(f"已保存模型到 {save_path}\n")
+        save_path = os.path.join(CHECKPOINT_DIR, f"multimodal_epoch{epoch+1}.pth")
+        torch.save(ckpt, save_path)
+        print(f"已保存模型到 {save_path}\n")
 
 print("训练完成。")
+# ---------------------------------------------------
+# 5. 测试集评估
+# ---------------------------------------------------
+visual_encoder.eval()
+audio_encoder.eval()
+text_encoder.eval()
+fusion_mlp.eval()
+test_loss = 0.0
+with torch.no_grad():
+    for batch in test_dataloader:
+        video_paths = batch["video_paths"]
+        audio_paths = batch["audio_paths"]
+        texts = batch["texts"]
+        labels = batch["labels"].to(DEVICE)
+
+        # 视觉特征
+        v_feats = torch.randn(len(video_paths), 512).to(DEVICE)
+        v_feats = visual_encoder(v_feats)
+
+        # 音频特征
+        a_feats = torch.randn(len(audio_paths), 512).to(DEVICE)
+        a_feats = audio_encoder(a_feats)
+
+        # 文本特征
+        t_feats = torch.randn(len(texts), 512).to(DEVICE)
+        t_feats = text_encoder(t_feats)
+
+        # 融合预测
+        preds = fusion_mlp(v_feats, a_feats, t_feats)
+
+        loss = criterion(preds, labels)
+        test_loss += loss.item() * labels.size(0)
+test_avg_loss = test_loss / len(test_dataset)
+print(f"测试集平均损失: {test_avg_loss:.4f}")
