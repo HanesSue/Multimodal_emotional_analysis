@@ -6,7 +6,7 @@ import os
 #       路径 & 文件配置
 ####################################
 # 原始视频文件目录
-VIDEO_FOLDER = "/path/to/your/videos"  # 例如: "./data/videos"
+VIDEO_FOLDER = "./data/ch-sims2s/ch-simsv2s/Raw"  # 例如: "./data/videos"
 # 提取后的音频保存目录
 AUDIO_FOLDER = "./data/audios"
 # Whisper 转写后的文本保存目录（可选：也可以直接在内存中使用，不存文件）
@@ -22,7 +22,7 @@ TEXT_ENCODER_PATH = "./pretrained/text_encoder.pt"
 # 例如：
 # video1.mp4,0
 # video2.mp4,1
-LABEL_CSV = "./labels.csv"
+LABEL_CSV = "./data/ch-sims2s/ch-simsv2s/meta.csv"
 
 # 训练时保存模型的目录
 CHECKPOINT_DIR = "./checkpoints"

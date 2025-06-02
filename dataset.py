@@ -17,7 +17,7 @@ class MultimodalEmotionDataset(Dataset):
       - 标签：从 CSV 中读取
     """
 
-    def __init__(self, video_folder: str = None, label_csv: str = None):
+    def __init__(self, mode,video_folder: str = None, label_csv: str = None):
         super(MultimodalEmotionDataset, self).__init__()
         if video_folder is None:
             video_folder = VIDEO_FOLDER
@@ -31,6 +31,8 @@ class MultimodalEmotionDataset(Dataset):
         # 保证索引从 0 开始
         self.samples = []
         for idx, row in df.iterrows():
+            if row['mode'] != mode:
+                continue
             vid_name = row["video_id"]+"/"+row["clip_id"]+".mp4"  # 视频文件名由 video_id 和 clip_id 组成
             label = float(row["label"])  # 假设情感标签是连续标量；如果是分类，可转为 int
             video_path = os.path.join(self.video_folder, vid_name)
