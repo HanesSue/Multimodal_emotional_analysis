@@ -1,5 +1,4 @@
 # data_processing.py
-
 import os
 import whisper
 import torch
@@ -7,11 +6,10 @@ from moviepy.editor import VideoFileClip
 from tqdm import tqdm
 
 import config
-
+device=torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # 确保输出文件夹存在
 os.makedirs(config.AUDIO_FOLDER, exist_ok=True)
 os.makedirs(config.TRANSCRIPT_FOLDER, exist_ok=True)
-
 # ----------------------------------
 # 1. 视频提取音频
 # ----------------------------------

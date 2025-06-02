@@ -15,9 +15,10 @@ from config import (
     CHECKPOINT_DIR,
 )
 
-from dataset import MultimodalEmotionDataset, multimodal_collate_fn
-from models.models import VideoExtractor, TextExtractor, AudioExtractor, FusionMLP
+from utils import SIMSData 
+from models import VideoExtractor, TextExtractor, AudioExtractor, FusionMLP
 import config
+from utils.SIMSData import SIMSData 
 # 如果使用 Whisper tokenizer，需要在 data_processing 中已经准备好文本字符串
 # 这里假设你有一个简单的文本 encoder（如 BERT / RoBERTa / LSTM 等），可以自行替换
 # 本示例暂不包含具体 Tokenizer 代码，只给出示意
@@ -25,45 +26,38 @@ import config
 # ---------------------------------------------------
 # 1. 初始化 Dataset & DataLoader
 # ---------------------------------------------------
-train_dataset = MultimodalEmotionDataset(mode="train") 
+train_dataset = SIMSData(mode="train",root=config.DATA_ROOT)  # 替换为你的数据集路径
 train_dataloader = DataLoader(
     train_dataset,
     batch_size=BATCH_SIZE,
     shuffle=True,
     num_workers=4,
-    collate_fn=multimodal_collate_fn,
     pin_memory=True,
 )
-test_dataset = MultimodalEmotionDataset(mode="test")  # 如果有测试集，可以类似初始化
+test_dataset = SIMSData(mode="test",root=config.DATA_ROOT)  # 测试集，可以类似初始化
 test_dataloader = DataLoader(
     test_dataset,
     batch_size=BATCH_SIZE,
     shuffle=False,
     num_workers=4,
-    collate_fn=multimodal_collate_fn,
     pin_memory=True,
 )
-val_dataset = MultimodalEmotionDataset(mode="valid")  # 验证集
+val_dataset = SIMSData(mode="valid",root=config.DATA_ROOT)  # 验证集
 val_dataloader = DataLoader(
     val_dataset,
     batch_size=BATCH_SIZE,
     shuffle=False,
     num_workers=4,
-    collate_fn=multimodal_collate_fn,
     pin_memory=True,
 )
 
 # ---------------------------------------------------
 # 2. 加载预训练编码器 & 融合 MLP
 # ---------------------------------------------------
-# 视觉编码器
-visual_encoder = PretrainedEncoderWrapper(model_path=config.VISUAL_ENCODER_PATH).to(DEVICE)
-# 音频编码器
-audio_encoder = PretrainedEncoderWrapper(model_path=config.AUDIO_ENCODER_PATH).to(DEVICE)
-# 文本编码器
-text_encoder = PretrainedEncoderWrapper(model_path=config.TEXT_ENCODER_PATH).to(DEVICE)
+visual_encoder = VideoExtractor(type='load', datails=True, save_path=config.VISUAL_ENCODER_PATH, data_path=config.LABEL_CSV).to(DEVICE)
+audio_encoder = AudioExtractor(model_path=config.AUDIO_ENCODER_PATH).to(DEVICE)
+text_encoder = TextExtractor(type='load', datails=True, save_path=config.VISUAL_ENCODER_PATH, data_path=config.LABEL_CSV).to(DEVICE)
 
-# 融合 MLP
 fusion_mlp = FusionMLP().to(DEVICE)
 
 # ---------------------------------------------------
@@ -93,77 +87,16 @@ for epoch in range(NUM_EPOCHS):
     epoch_loss = 0.0
     train_pbar = tqdm(train_dataloader, desc=f"Epoch {epoch+1}/{NUM_EPOCHS}")
 
-    for batch in train_pbar:
-        # ---------------------------
-        # 4.1 读取数据
-        # ---------------------------
-        video_paths = batch["video_paths"]
-        audio_paths = batch["audio_paths"]
-        texts = batch["texts"]
-        labels = batch["labels"].to(DEVICE)  # (batch_size,)
+    for video_tensor,audio_tensor,texts,labels in train_pbar:
+        video_tensor = video_tensor.to(DEVICE)
+        audio_tensor = audio_tensor.to(DEVICE)
+        texts = texts
+        labels = labels.to(DEVICE)  # (batch_size,)
 
-        # ---------------------------
-        # 4.2 视觉特征抽取
-        # ---------------------------
-        # 示例：假设你的视觉编码器输入需要的是 (B, C, T, H, W) 形式的张量
-        # 这里我们用伪代码表示：
-        #   v_inputs = []
-        #   for vp in video_paths:
-        #       # ① 用 cv2 或 torchvision.io 读取视频帧序列
-        #       # ② 抽取每隔 N 帧/或首尾帧
-        #       # ③ resize & normalize
-        #       #   frame_tensor: (C, T, H, W)
-        #       v_inputs.append(frame_tensor)
-        #   v_inputs = torch.stack(v_inputs, dim=0).to(DEVICE)
-        #
-        #   v_feats = visual_encoder(v_inputs)  # (batch_size, VISUAL_FEATURE_DIM)
-        #
-        # 你需要根据实际视觉编码器结构补全此处：
-        # ----------------------------------------------------------------------------
-        # 假设视觉编码器只需要“预提取好”的512维特征张量，这里我们直接随机生成示例张量：
-        v_feats = torch.randn(len(video_paths), 512).to(DEVICE)
-        v_feats = visual_encoder(v_feats)  # (batch_size, VISUAL_FEATURE_DIM)
-        # ----------------------------------------------------------------------------
+        v_feats = visual_encoder(video_tensor)  # (batch_size, VISUAL_FEATURE_DIM)
+        a_feats = audio_encoder(audio_tensor)  # (batch_size, AUDIO_FEATURE_DIM)
+        t_feats = text_encoder(texts)  # (batch_size, TEXT_FEATURE_DIM)
 
-        # ---------------------------
-        # 4.3 音频特征抽取
-        # ---------------------------
-        # 示例：假设你的音频编码器输入需要的是 (B, 1, L) 形式原始波形 或 (B, mel_bins, time_frames)
-        # 这里我们用伪代码表示：
-        #   a_inputs = []
-        #   for ap in audio_paths:
-        #       waveform, sr = torchaudio.load(ap)  # (1, L), 采样率 sr
-        #       # ① 如果需要转 mel-spectrogram，可用 torchaudio.transforms.MelSpectrogram
-        #       # ② 或者直接将 waveform 输入到音频编码器
-        #       a_inputs.append(mel_spec_tensor)
-        #   a_inputs = torch.stack(a_inputs, dim=0).to(DEVICE)
-        #
-        #   a_feats = audio_encoder(a_inputs)  # (batch_size, AUDIO_FEATURE_DIM)
-        #
-        # 你需要根据实际音频编码器结构补全此处：
-        # ----------------------------------------------------------------------------
-        a_feats = torch.randn(len(audio_paths), 512).to(DEVICE)
-        a_feats = audio_encoder(a_feats)  # (batch_size, AUDIO_FEATURE_DIM)
-        # ----------------------------------------------------------------------------
-
-        # ---------------------------
-        # 4.4 文本特征抽取
-        # ---------------------------
-        # 示例：假设你的文本编码器需要的是 token_ids 张量 (B, seq_len)
-        # 你可以在此先做简单 tokenize，再送到文本编码器
-        #   tokenized_list = tokenizer(texts, padding=True, truncation=True, return_tensors="pt")
-        #   t_inputs = tokenized_list["input_ids"].to(DEVICE)
-        #   t_feats = text_encoder(t_inputs)  # (batch_size, TEXT_FEATURE_DIM)
-        #
-        # 你需要根据实际文本编码器结构补全此处：
-        # ----------------------------------------------------------------------------
-        t_feats = torch.randn(len(texts), 512).to(DEVICE)
-        t_feats = text_encoder(t_feats)  # (batch_size, TEXT_FEATURE_DIM)
-        # ----------------------------------------------------------------------------
-
-        # ---------------------------
-        # 4.5 融合 & 计算损失
-        # ---------------------------
         preds = fusion_mlp(v_feats, a_feats, t_feats)  # (batch_size,)
 
         loss = criterion(preds, labels)
@@ -185,26 +118,17 @@ for epoch in range(NUM_EPOCHS):
     
     val_epoch_loss = 0.0
     with torch.no_grad():
-        for batch in val_dataloader:
-            video_paths = batch["video_paths"]
-            audio_paths = batch["audio_paths"]
-            texts = batch["texts"]
-            labels = batch["labels"].to(DEVICE)
+        for video_tensor,audio_tensor,texts,labels in val_dataloader:
+            video_tensor = video_tensor.to(DEVICE)
+            audio_tensor = audio_tensor.to(DEVICE)
+            texts = texts
+            labels = labels.to(DEVICE)  # (batch_size,)
 
-            # 视觉特征
-            v_feats = torch.randn(len(video_paths), 512).to(DEVICE)
-            v_feats = visual_encoder(v_feats)
+            v_feats = visual_encoder(video_tensor)  # (batch_size, VISUAL_FEATURE_DIM)
+            a_feats = audio_encoder(audio_tensor)  # (batch_size, AUDIO_FEATURE_DIM)
+            t_feats = text_encoder(texts)  # (batch_size, TEXT_FEATURE_DIM)
 
-            # 音频特征
-            a_feats = torch.randn(len(audio_paths), 512).to(DEVICE)
-            a_feats = audio_encoder(a_feats)
-
-            # 文本特征
-            t_feats = torch.randn(len(texts), 512).to(DEVICE)
-            t_feats = text_encoder(t_feats)
-
-            # 融合预测
-            preds = fusion_mlp(v_feats, a_feats, t_feats)
+            preds = fusion_mlp(v_feats, a_feats, t_feats)  # (batch_size,)
 
             loss = criterion(preds, labels)
             val_epoch_loss += loss.item() * labels.size(0)
@@ -240,26 +164,17 @@ text_encoder.eval()
 fusion_mlp.eval()
 test_loss = 0.0
 with torch.no_grad():
-    for batch in test_dataloader:
-        video_paths = batch["video_paths"]
-        audio_paths = batch["audio_paths"]
-        texts = batch["texts"]
-        labels = batch["labels"].to(DEVICE)
+    for video_tensor,audio_tensor,texts,labels in test_dataloader:
+        video_tensor = video_tensor.to(DEVICE)
+        audio_tensor = audio_tensor.to(DEVICE)
+        texts = texts
+        labels = labels.to(DEVICE)  # (batch_size,)
 
-        # 视觉特征
-        v_feats = torch.randn(len(video_paths), 512).to(DEVICE)
-        v_feats = visual_encoder(v_feats)
+        v_feats = visual_encoder(video_tensor)  # (batch_size, VISUAL_FEATURE_DIM)
+        a_feats = audio_encoder(audio_tensor)  # (batch_size, AUDIO_FEATURE_DIM)
+        t_feats = text_encoder(texts)  # (batch_size, TEXT_FEATURE_DIM)
 
-        # 音频特征
-        a_feats = torch.randn(len(audio_paths), 512).to(DEVICE)
-        a_feats = audio_encoder(a_feats)
-
-        # 文本特征
-        t_feats = torch.randn(len(texts), 512).to(DEVICE)
-        t_feats = text_encoder(t_feats)
-
-        # 融合预测
-        preds = fusion_mlp(v_feats, a_feats, t_feats)
+        preds = fusion_mlp(v_feats, a_feats, t_feats)  # (batch_size,)
 
         loss = criterion(preds, labels)
         test_loss += loss.item() * labels.size(0)

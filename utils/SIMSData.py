@@ -3,8 +3,11 @@ import pandas as pd
 import os
 from torch.utils.data import Dataset
 from Separator import Separator
-
-
+import cv2
+from typing import List
+import torch
+from utils.VideoProcessor import VideoProcessor
+from utils.AudioProcessor import AudioProcessor
 class SIMSData(Dataset):
     def __init__(self, **kwargs):
         super().__init__()
@@ -12,6 +15,8 @@ class SIMSData(Dataset):
         self.mode = kwargs["mode"]
         self.separator = Separator(self, **kwargs)
         self._raw_meta = None
+        self.video_processor = VideoProcessor(frame_interval=10)
+        self.audio_processor = AudioProcessor()
 
     @property
     def meta(self):
@@ -43,8 +48,11 @@ class SIMSData(Dataset):
     def __getitem__(self, idx):
         video_id, clip_id, text = self.meta.iloc[idx][["video_id", "clip_id", "text"]]
         split_path = self._get_path(video_id, clip_id)
-        labels = self._get_labels(video_id, clip_id)
-        return split_path, text, labels
+        labels = float(self._get_labels(video_id, clip_id))
+        frames_tensors=self.video_processor.process(split_path)
+        audio_tensors = self.audio_processor.process(split_path)
+        #return frames_tensors, target_score
+        return frames_tensors,audio_tensors, text, labels
 
 
 if __name__ == "__main__":
