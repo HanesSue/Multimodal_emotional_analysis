@@ -329,3 +329,15 @@ class TextExtractor:
             print(
                 f"真实值: {raw_true:.1f} | 预测值: {raw_pred:.4f} | 离散化: {self.discretize(raw_pred):.1f}"
             )
+    def predict_batch(self, text_batch):
+        """
+        text_batch为文本的列表，长度为n
+
+        输出为Tensor(维度为 n * 1 )
+        """
+        
+        # 对每个文本调用self.predict方法并收集结果
+        predictions = [self.predict(text) for text in text_batch]
+        
+        # 将结果列表转换为张量并调整形状为 n*1
+        return torch.tensor(predictions).reshape(-1, 1)
