@@ -7,7 +7,10 @@ from torch.utils.data import Dataset, DataLoader
 from Processor import MakeProcessor
 from functools import partial
 import torch
-
+import cv2
+from typing import List
+from utils.VideoProcessor import VideoProcessor
+from utils.AudioProcessor import AudioProcessor
 
 class SIMSData(Dataset):
     def __init__(self, **kwargs):
@@ -16,6 +19,8 @@ class SIMSData(Dataset):
         self.mode = kwargs["mode"]
         self.sample_rate = kwargs.get("sample_rate", 16000)
         self._raw_meta = None
+        self.video_processor = VideoProcessor(frame_interval=10)
+        self.audio_processor = AudioProcessor()
 
 
     @property
@@ -67,7 +72,9 @@ class SIMSData(Dataset):
         split_path = self._get_path(video_id, clip_id)
         audio_waveform, sample_rate = self._separate_audio(split_path, self.sample_rate)
         labels = self._get_labels(video_id, clip_id)
-        return split_path, audio_waveform, text, labels
+        frames_tensors=self.video_processor.process(split_path)
+        #return frames_tensors, target_score
+        return frames_tensors, audio_waveform, text, labels
 
 
 class SIMSLoader:

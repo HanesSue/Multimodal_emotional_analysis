@@ -1,59 +1,64 @@
-# config.py
-
-import os
-
-####################################
-#       路径 & 文件配置
-####################################
-# 原始视频文件目录
-VIDEO_FOLDER = "./data/ch-sims2s/ch-simsv2s/Raw"  # 例如: "./data/videos"
-# 提取后的音频保存目录
-AUDIO_FOLDER = "./data/audios"
-# Whisper 转写后的文本保存目录（可选：也可以直接在内存中使用，不存文件）
-TRANSCRIPT_FOLDER = "./data/transcripts"
-
-# 三个预训练编码器的权重文件路径
-# 假设分别是：visual_encoder.pt, audio_encoder.pt, text_encoder.pt
-VISUAL_ENCODER_PATH = "./pretrained/visual_encoder.pt"
-AUDIO_ENCODER_PATH = "./pretrained/audio_encoder.pt"
-TEXT_ENCODER_PATH = "./pretrained/text_encoder.pt"
-
-# 标签文件：CSV 格式，包含两列 [video_filename, label]
-# 例如：
-# video1.mp4,0
-# video2.mp4,1
-LABEL_CSV = "./data/ch-sims2s/ch-simsv2s/meta.csv"
-
-# 训练时保存模型的目录
-CHECKPOINT_DIR = "./checkpoints"
-os.makedirs(CHECKPOINT_DIR, exist_ok=True)
-
-####################################
-#       模型 & 训练超参数
-####################################
-# MLP 隐藏层维度
-MLP_HIDDEN_DIM = 256
-# 三个编码器各自输出的特征维度（需要与预训练时一致）
-VISUAL_FEATURE_DIM = 128
-AUDIO_FEATURE_DIM = 128
-TEXT_FEATURE_DIM = 128
-
-# 学习率、批大小、训练轮数等
-LR = 1e-4
-BATCH_SIZE = 4
-NUM_EPOCHS = 10
-
-# 是否在训练时微调预训练编码器（False 表示编码器 freeze，仅训练 MLP）
-FINETUNE_ENCODERS = False
-
-####################################
-#       Whisper (ASR) 配置
-####################################
-# Whisper 模型名，可选 "tiny", "base", "small", "medium", "large"
-WHISPER_MODEL_NAME = "base"
-
-####################################
-#       设备配置
-####################################
+import cv2
+from mtcnn import MTCNN
 import torch
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+from torchvision import transforms
+from models import VisualExtractor  # 替换为你自己的路径和类名
+import numpy as np
+
+# 加载模型
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+model = VisualExtractor().to(device)
+model.load_state_dict(torch.load('visual_encoder.pt', map_location=device))
+model.eval()
+
+# 图像预处理方法（你训练时用的transform）
+transform = transforms.Compose([
+    transforms.ToPILImage(),
+    transforms.Resize((224, 224)),
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
+])
+
+# 初始化 MTCNN
+detector = MTCNN()
+
+# 视频路径
+input_path = '004_VID.mp4'
+output_path = 'output_with_emotion.mp4'
+
+cap = cv2.VideoCapture(input_path)
+fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+fps = cap.get(cv2.CAP_PROP_FPS)
+width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+
+frame_idx = 0
+while cap.isOpened():
+    ret, frame = cap.read()
+    if not ret:
+        break
+    print(f"处理帧 {frame_idx}")
+    frame_idx += 1
+
+    # 检测人脸
+    results = detector.detect_faces(frame)
+
+    # 整帧送入模型预测情绪（也可以替换为送入人脸区域）
+    input_tensor = transform(frame).unsqueeze(0).to(device)
+    with torch.no_grad():
+        logits = model(input_tensor)
+
+    # 显示每个人脸框，并在上方写入情绪标签
+    for res in results:
+        x, y, w, h = [int(v) for v in res['box']]
+        x, y = max(0, x), max(0, y)
+        cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
+        cv2.putText(frame, f"情绪值：{logits}", (x, max(0, y - 10)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
+
+    out.write(frame)
+
+cap.release()
+out.release()
+cv2.destroyAllWindows()

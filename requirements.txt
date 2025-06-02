@@ -1,6 +1,6 @@
 torch>=1.12.0
 torchvision>=0.13.0
-moviepy>=1.0.3
+moviepy==1.0.3
 whisper                # 如果使用 OpenAI Whisper 做 ASR
 numpy
 pandas
