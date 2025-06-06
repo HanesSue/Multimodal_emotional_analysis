@@ -4,13 +4,12 @@ import os
 import torchaudio
 import tempfile
 from torch.utils.data import Dataset, DataLoader
-from Processor import MakeProcessor
+from .Processor import MakeProcessor
 from functools import partial
 import torch
 import cv2
 from typing import List
-from utils.VideoProcessor import VideoProcessor
-from utils.AudioProcessor import AudioProcessor
+
 
 class SIMSData(Dataset):
     def __init__(self, **kwargs):
@@ -19,9 +18,6 @@ class SIMSData(Dataset):
         self.mode = kwargs["mode"]
         self.sample_rate = kwargs.get("sample_rate", 16000)
         self._raw_meta = None
-        self.video_processor = VideoProcessor(frame_interval=10)
-        self.audio_processor = AudioProcessor()
-
 
     @property
     def meta(self):
@@ -29,8 +25,8 @@ class SIMSData(Dataset):
             meta_path = os.path.join(self.root, "meta.csv")
             self._raw_meta = pd.read_csv(meta_path)
 
-        if self.mode not in ["train", "test", "val"]:
-            raise ValueError("mode must be one of train, test, val")
+        if self.mode not in ["train", "test", "valid"]:
+            raise ValueError("mode must be one of train, test, valid")
 
         return self._raw_meta[self._raw_meta["mode"] == self.mode]
 
@@ -52,7 +48,7 @@ class SIMSData(Dataset):
         from moviepy.editor import AudioFileClip
 
         with tempfile.NamedTemporaryFile(
-            suffix=".wav", delete=False
+            suffix=".wav", delete=True
         ) as temp_audio_file:
             tmp_path = temp_audio_file.name
         with AudioFileClip(video_path) as clip:
@@ -72,51 +68,64 @@ class SIMSData(Dataset):
         split_path = self._get_path(video_id, clip_id)
         audio_waveform, sample_rate = self._separate_audio(split_path, self.sample_rate)
         labels = self._get_labels(video_id, clip_id)
-        frames_tensors=self.video_processor.process(split_path)
-        #return frames_tensors, target_score
+        frames_tensors = None
+        # return frames_tensors, target_score
         return frames_tensors, audio_waveform, text, labels
 
 
 class SIMSLoader:
     def __init__(
-        self, root="./data/ch-sims2s/ch-simsv2s", mode="audio", batch_size=32, **kwargs
+        self, root="./data/ch-sims2s/ch-simsv2s", mode="audio", batch_size=32, num_workers=0, **kwargs
     ):
         self.trainset = SIMSData(root=root, mode="train")
         self.testset = SIMSData(root=root, mode="test")
-        self.valset = SIMSData(root=root, mode="val")
+        self.valset = SIMSData(root=root, mode="valid")
         self.mode = mode
         self.BATCH_SIZE = batch_size
+        self.NUM_WORKERS = num_workers
         if mode not in ["audio", "text", "video"]:
             raise ValueError("mode must be one of audio, text or video")
 
     @property
-    def dataloader(self):
+    def trainloader(self):
         collate_fn = self.make_collate_fn()
-        return (
-            DataLoader(
-                self.trainset,
-                batch_size=self.BATCH_SIZE,
-                shuffle=True,
-                collate_fn=collate_fn,
-            ),
-            DataLoader(
-                self.testset,
-                batch_size=self.BATCH_SIZE,
-                shuffle=False,
-                collate_fn=collate_fn,
-            ),
-            DataLoader(
-                self.valset,
-                batch_size=self.BATCH_SIZE,
-                shuffle=False,
-                collate_fn=collate_fn,
-            ),
+        return DataLoader(
+            self.trainset,
+            batch_size=self.BATCH_SIZE,
+            shuffle=True,
+            collate_fn=collate_fn,
+            num_workers=self.NUM_WORKERS,
+            pin_memory=True,
+        )
+
+    @property
+    def testloader(self):
+        collate_fn = self.make_collate_fn()
+        return DataLoader(
+            self.testset,
+            batch_size=self.BATCH_SIZE,
+            shuffle=False,
+            collate_fn=collate_fn,
+            num_workers=self.NUM_WORKERS,
+            pin_memory=True,
+        )
+
+    @property
+    def valloader(self):
+        collate_fn = self.make_collate_fn()
+        return DataLoader(
+            self.valset,
+            batch_size=self.BATCH_SIZE,
+            shuffle=False,
+            collate_fn=collate_fn,
+            num_workers=self.NUM_WORKERS,
+            pin_memory=True,
         )
 
     def make_collate_fn(self):
         if self.mode == "audio":
             processor = MakeProcessor(
-                mode="audio", model_name="microsoft/wavlm-base-plus"
+                mode="audio", model_name="facebook/hubert-base-ls960"
             )
             return partial(self.collate_fn, processor=processor, mode=self.mode)
         elif self.mode == "text":
@@ -145,12 +154,13 @@ class SIMSLoader:
 
 if __name__ == "__main__":
     test = SIMSData(root="./data/ch-sims2s/ch-simsv2s", mode="test")
-    test_loader = SIMSLoader(root="./data/ch-sims2s/ch-simsv2s", mode="audio", batch_size=32)
-    test_dataloader = test_loader.dataloader[1]  # Get the test DataLoader
-    for batch in test_dataloader:
+    test_loader = SIMSLoader(
+        root="./data/ch-sims2s/ch-simsv2s", mode="audio", batch_size=32
+    ).testloader
+
+    for batch in test_loader:
         audio_feats, labels = batch
-        print(audio_feats)
-        print(labels)
+        print(audio_feats["input_values"].shape)  # Print shape of audio features
+        print(labels.shape)
         break  # Just to demonstrate one batch
     print(test.meta.head())
-    print(test[0])

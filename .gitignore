@@ -1,3 +1,6 @@
 data/*
 notebooks/*
 */__pycache__/*
+checkpoints/*
+trainaudio.py
+*.ipynb
