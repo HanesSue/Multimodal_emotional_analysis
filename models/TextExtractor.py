@@ -1,5 +1,4 @@
 # -*- coding : utf-8 -*-
-import pandas as pd
 import numpy as np
 import torch
 import torch.nn as nn
@@ -7,6 +6,7 @@ import os
 from transformers import BertModel, get_linear_schedule_with_warmup
 from torch.optim import AdamW
 from tqdm import tqdm
+from utils.Processor import MakeProcessor
 
 
 # 定义BertTextCNN回归模型
@@ -124,21 +124,15 @@ class TextExtractor:
         return float(values[np.argmin(np.abs(values - value))])
 
     # 单条预测接口
-    def predict(self, text):
-        encoding = self.tokenizer(
-            text,
-            padding="max_length",
-            truncation=True,
-            max_length=self.MAX_LEN,
-            return_tensors="pt",
-        )
-        input_ids = encoding["input_ids"].to(self.DEVICE)
-        attention_mask = encoding["attention_mask"].to(self.DEVICE)
+    def predict(self, text, **kwargs):
+        discretized = kwargs.get("discretized", False)
+        self.model.eval()
+        processor = MakeProcessor(mode="text", model_name=self.MODEL_NAME)
+        inputs = processor.process(text, max_len=self.MAX_LEN)
+        inputs = {k: v.to(self.DEVICE) for k, v in inputs.items()}
         with torch.no_grad():
-            output = self.model(input_ids, attention_mask)
-        raw_pred = output.item()
-        discrete_pred = self.discretize(raw_pred)
-        return discrete_pred
+            outputs = self.model(**inputs)
+        return self.discretize(outputs.item()) if discretized else outputs.item()
 
     def train(self, train_loader, val_loader):
         if self.details:
