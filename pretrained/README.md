@@ -1,1 +1,0 @@
-# 下载后的预训练权重放在这里，命名为visual_encoder.pt，audio_encoder.pt，text_encoder.pt

@@ -4,3 +4,4 @@ notebooks/*
 checkpoints/*
 trainaudio.py
 *.ipynb
+OpenFace_2.2.0_win_x64/*

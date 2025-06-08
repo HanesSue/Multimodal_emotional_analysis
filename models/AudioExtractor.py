@@ -39,6 +39,34 @@ class HuBertSentimentRegressor(nn.Module):
         return regression_output.squeeze(-1)  # (batch,)
 
 
+class EarlyStopping:
+    def __init__(self, patience=3, delta=1e-4):
+        self.patience = patience
+        self.delta = delta
+        self.counter = 0
+        self.best_score = None
+        self.early_stop = False
+
+    def __call__(self, val_loss, model, path):
+        score = -val_loss
+        if self.best_score is None:
+            self.best_score = score
+            self.save_checkpoint(model, path, val_loss)
+        elif score < self.best_score + self.delta:
+            self.counter += 1
+            print(f" EarlyStopping counter: {self.counter}/{self.patience}")
+            if self.counter >= self.patience:
+                self.early_stop = True
+        else:
+            self.best_score = score
+            self.save_checkpoint(model, path, val_loss)
+            self.counter = 0
+
+    def save_checkpoint(self, model, path, val_loss):
+        torch.save(model.state_dict(), path)
+        print(f" Model saved with improved Val MSE: {val_loss:.4f}")
+
+
 class AudioExtractor:
     def __init__(self, pretrained_model=None, details=True, **kwargs):
         self.details = details
@@ -54,8 +82,8 @@ class AudioExtractor:
         os.makedirs(os.path.dirname(self.SAVE_PATH), exist_ok=True)
 
         if details:
-            print(f"Device: {self.DEVICE}, Epochs: {self.EPOCHS}, LR: {self.LR}")
-            print(f"Model Name: {self.MODEL_NAME}, Save Path: {self.SAVE_PATH}")
+            print(f"Device: {self.DEVICE}")
+            print(f"Model Name: {self.MODEL_NAME}")
 
         self.DISCRETE_VALUES = [
             -1.0,
@@ -89,7 +117,8 @@ class AudioExtractor:
         values = np.array(self.DISCRETE_VALUES)
         return values[np.argmin(np.abs(values - value))]
 
-    def predict(self, audio):
+    def predict(self, audio, **kwargs):
+        discretized = kwargs.get("discretized", False)
         self.model.eval()
         processor = MakeProcessor(mode="audio", model_name=self.MODEL_NAME)
         input_values = processor.processor(
@@ -97,9 +126,13 @@ class AudioExtractor:
         ).input_values.to(self.DEVICE)
         with torch.no_grad():
             output = self.model(input_values.to(self.DEVICE))
-        return self.discretize(output.item())
+        return self.discretize(output.item()) if discretized else output.item()
 
     def train(self, train_loader, val_loader):
+        if self.details:
+            print(f"Training for {self.EPOCHS} epochs with learning rate {self.LR}")
+            
+        save_rule = EarlyStopping(patience=3, delta=1e-4)
         total_steps = len(train_loader) * self.EPOCHS
         scheduler = get_linear_schedule_with_warmup(
             self.optimizer,
@@ -133,7 +166,11 @@ class AudioExtractor:
             avg_loss = epoch_loss / len(train_loader)
             print(f"Epoch {epoch + 1}/{self.EPOCHS} - Avg Loss: {avg_loss:.4f}")
             val_loss = self.evaluate(val_loader)
-            torch.save(self.model.state_dict(), self.SAVE_PATH)
+            save_rule(val_loss, self.model, self.SAVE_PATH)
+            
+            if save_rule.early_stop:
+                print("Early stopping")
+                break
 
     def evaluate(self, val_loader):
         self.model.eval()

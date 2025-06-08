@@ -47,9 +47,7 @@ class SIMSData(Dataset):
     def _separate_audio(video_path, sample_rate=16000):
         from moviepy.editor import AudioFileClip
 
-        with tempfile.NamedTemporaryFile(
-            suffix=".wav", delete=True
-        ) as temp_audio_file:
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=True) as temp_audio_file:
             tmp_path = temp_audio_file.name
         with AudioFileClip(video_path) as clip:
             clip.write_audiofile(tmp_path, fps=sample_rate, verbose=False, logger=None)
@@ -70,12 +68,17 @@ class SIMSData(Dataset):
         labels = self._get_labels(video_id, clip_id)
         frames_tensors = None
         # return frames_tensors, target_score
-        return frames_tensors, audio_waveform, text, labels
+        return (video_id, clip_id), audio_waveform, text, labels
 
 
 class SIMSLoader:
     def __init__(
-        self, root="./data/ch-sims2s/ch-simsv2s", mode="audio", batch_size=32, num_workers=0, **kwargs
+        self,
+        root="./data/ch-sims2s/ch-simsv2s",
+        mode="audio",
+        batch_size=32,
+        num_workers=0,
+        **kwargs,
     ):
         self.trainset = SIMSData(root=root, mode="train")
         self.testset = SIMSData(root=root, mode="test")
@@ -83,8 +86,8 @@ class SIMSLoader:
         self.mode = mode
         self.BATCH_SIZE = batch_size
         self.NUM_WORKERS = num_workers
-        if mode not in ["audio", "text", "video"]:
-            raise ValueError("mode must be one of audio, text or video")
+        if mode not in ["audio", "text", "video", "mlp"]:
+            raise ValueError("mode must be one of audio, text, video or mlp")
 
     @property
     def trainloader(self):
@@ -129,9 +132,12 @@ class SIMSLoader:
             )
             return partial(self.collate_fn, processor=processor, mode=self.mode)
         elif self.mode == "text":
-            ...
+            processor = MakeProcessor(mode="text", model_name="bert-base-chinese")
+            return partial(self.collate_fn, processor=processor, mode=self.mode)
         elif self.mode == "video":
             ...
+        elif self.mode == "mlp":
+            return partial(self.collate_fn, processor=None, mode=self.mode)
         else:
             raise ValueError("mode must be one of audio, text or video")
         return None
@@ -145,9 +151,21 @@ class SIMSLoader:
             label_As = [torch.tensor(label[2]) for label in labels]
             return audios_feats, torch.stack(label_As)
         elif mode == "text":
-            ...
+            texts = [text for text in texts]
+            text_feats = processor.process(texts, max_length=64)
+            label_Ts = [torch.tensor(label[1]) for label in labels]
+            return text_feats, torch.stack(label_Ts)
         elif mode == "video":
             ...
+        elif mode == "mlp":
+            label_Ts = [torch.tensor(label[1]).unsqueeze(0) for label in labels]
+            label_As = [torch.tensor(label[2]).unsqueeze(0) for label in labels]
+            label_Vs = [torch.tensor(label[3]).unsqueeze(0) for label in labels]
+            label_alls = [torch.tensor(label[0]) for label in labels]
+            return torch.cat(
+                (torch.stack(label_As), torch.stack(label_Ts), torch.stack(label_Vs)),
+                dim=-1,
+            ), torch.stack(label_alls)
         else:
             raise ValueError("mode must be one of audio, text or video")
 
@@ -155,12 +173,12 @@ class SIMSLoader:
 if __name__ == "__main__":
     test = SIMSData(root="./data/ch-sims2s/ch-simsv2s", mode="test")
     test_loader = SIMSLoader(
-        root="./data/ch-sims2s/ch-simsv2s", mode="audio", batch_size=32
+        root="./data/ch-sims2s/ch-simsv2s", mode="mlp", batch_size=32
     ).testloader
 
     for batch in test_loader:
-        audio_feats, labels = batch
-        print(audio_feats["input_values"].shape)  # Print shape of audio features
+        x, labels = batch
+        print(x.shape)  # Print shape of audio features
         print(labels.shape)
         break  # Just to demonstrate one batch
     print(test.meta.head())
